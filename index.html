@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LGTM — gif picker for code reviews</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --text: #1c2128;
+    --muted: #6a737d;
+    --border: #d8dde3;
+    --accent: #1f883d;
+    --accent-hover: #1a7f37;
+    --danger: #cf222e;
+    --radius: 12px;
+    --shadow: 0 1px 3px rgba(27, 31, 36, 0.08), 0 8px 24px rgba(27, 31, 36, 0.06);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 24px 16px 64px;
+  }
+  header {
+    width: 100%;
+    max-width: 640px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+  h1 { font-size: 28px; margin: 0; letter-spacing: -0.5px; }
+  h1 .check { color: var(--accent); }
+  .subtitle { color: var(--muted); font-size: 14px; }
+
+  main { width: 100%; max-width: 640px; display: flex; flex-direction: column; gap: 16px; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 20px;
+  }
+
+  /* --- gif stage --- */
+  .stage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+  }
+  .gif-frame {
+    width: 100%;
+    min-height: 280px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #eceff2;
+    border-radius: 8px;
+    overflow: hidden;
+    cursor: pointer;
+    position: relative;
+  }
+  .gif-frame img {
+    max-width: 100%;
+    max-height: 420px;
+    display: block;
+  }
+  .gif-frame.loading::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(100deg, transparent 30%, rgba(255,255,255,0.7) 50%, transparent 70%);
+    background-size: 200% 100%;
+    animation: shimmer 1.1s infinite;
+  }
+  @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+  .gif-hint { color: var(--muted); font-size: 13px; margin: -4px 0 0; }
+  .gif-error { color: var(--danger); font-size: 14px; text-align: center; padding: 0 12px; }
+
+  .btn-row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  button {
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 8px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s;
+  }
+  button:hover { background: #f0f2f4; }
+  button:active { transform: translateY(1px); }
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  button.primary:hover { background: var(--accent-hover); }
+  button.danger-ghost { color: var(--danger); }
+  button.danger-ghost:hover { background: #fff0f1; border-color: #f0c3c7; }
+  button.small { font-size: 12.5px; padding: 5px 10px; font-weight: 500; }
+
+  /* --- tags --- */
+  label { font-size: 13px; font-weight: 600; color: var(--muted); display: block; margin-bottom: 6px; }
+  input[type="text"], input[type="password"] {
+    font: inherit;
+    font-size: 14px;
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--text);
+  }
+  input:focus { outline: 2px solid #9ccfa8; outline-offset: -1px; border-color: var(--accent); }
+  .hint { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+  .hint a { color: inherit; }
+
+  /* --- settings --- */
+  details.settings > summary {
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--muted);
+    list-style: none;
+    user-select: none;
+  }
+  details.settings > summary::before { content: "▸ "; }
+  details.settings[open] > summary::before { content: "▾ "; }
+  details.settings > summary::-webkit-details-marker { display: none; }
+  .settings-body { margin-top: 16px; display: flex; flex-direction: column; gap: 20px; }
+  .settings-section h3 { font-size: 14px; margin: 0 0 8px; }
+  .keyrow { display: flex; gap: 8px; }
+  .keyrow input { flex: 1; }
+
+  ul.denylist { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto; }
+  ul.denylist li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  ul.denylist img { width: 48px; height: 36px; object-fit: cover; border-radius: 4px; flex-shrink: 0; background: #eceff2; }
+  ul.denylist .deny-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+  .empty-note { font-size: 13px; color: var(--muted); }
+
+  /* --- key gate --- */
+  #keyGate p { margin: 0 0 12px; font-size: 14px; }
+  #keyGate .keyrow { margin-top: 4px; }
+
+  /* --- toast --- */
+  #toast {
+    position: fixed;
+    bottom: 28px;
+    left: 50%;
+    transform: translateX(-50%) translateY(12px);
+    background: var(--text);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 10px 18px;
+    border-radius: 999px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s, transform 0.18s;
+    box-shadow: var(--shadow);
+    max-width: 90vw;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  .hidden { display: none !important; }
+
+  footer { margin-top: 28px; font-size: 12.5px; color: var(--muted); }
+  footer a { color: inherit; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>LGTM <span class="check">✓</span></h1>
+  <span class="subtitle">gif picker for code reviews</span>
+</header>
+
+<main>
+  <!-- First-run: ask for a Giphy API key. Stored in localStorage on this machine only. -->
+  <section id="keyGate" class="card hidden">
+    <p><strong>One-time setup:</strong> this page needs a (free) Giphy API key to fetch gifs.
+       Grab one at <a href="https://developers.giphy.com/dashboard/" target="_blank" rel="noopener">developers.giphy.com</a>
+       (create an app, choose “API”), then paste it below.</p>
+    <div class="keyrow">
+      <input type="password" id="keyGateInput" placeholder="Giphy API key" autocomplete="off" spellcheck="false">
+      <button class="primary" id="keyGateSave">Save</button>
+    </div>
+    <p class="hint">The key is stored in your browser’s localStorage — it never leaves this machine and is not part of the page source.</p>
+    <p class="gif-error hidden" id="keyGateError"></p>
+  </section>
+
+  <section id="app" class="hidden">
+    <div class="card stage">
+      <div class="gif-frame loading" id="gifFrame" title="Click to copy markdown">
+        <img id="gifImg" class="hidden" alt="LGTM gif">
+        <span class="gif-error hidden" id="gifError"></span>
+      </div>
+      <p class="gif-hint">Click the gif to copy it as markdown</p>
+      <div class="btn-row">
+        <button class="primary" id="copyMd">Copy markdown</button>
+        <button id="copyUrl">Copy gif URL</button>
+        <button id="reroll">🎲 Another one</button>
+        <button class="danger-ghost" id="deny">🚫 Never show this again</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <label for="tagsInput">Search tags (comma-separated)</label>
+      <input type="text" id="tagsInput" spellcheck="false">
+      <p class="hint">A random tag is picked for each roll. Changes are saved automatically.</p>
+    </div>
+
+    <details class="settings card">
+      <summary>Settings</summary>
+      <div class="settings-body">
+
+        <div class="settings-section">
+          <h3>Giphy API key</h3>
+          <div class="keyrow">
+            <input type="password" id="keyInput" placeholder="Giphy API key" autocomplete="off" spellcheck="false">
+            <button id="keySave" class="small">Update</button>
+            <button id="keyForget" class="small danger-ghost">Forget</button>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Denylist (<span id="denyCount">0</span>)</h3>
+          <div class="btn-row" style="justify-content: flex-start;">
+            <button class="small" id="exportBtn">Export JSON</button>
+            <button class="small" id="importBtn">Import JSON</button>
+            <button class="small danger-ghost" id="clearDeny">Clear denylist</button>
+            <input type="file" id="importFile" accept="application/json,.json" class="hidden">
+          </div>
+          <ul class="denylist" id="denyList"></ul>
+          <p class="empty-note hidden" id="denyEmpty">Nothing denied yet.</p>
+        </div>
+
+      </div>
+    </details>
+  </section>
+</main>
+
+<footer>Powered by <a href="https://giphy.com" target="_blank" rel="noopener">GIPHY</a>. Rated G only.</footer>
+
+<div id="toast" role="status"></div>
+
+<script>
+"use strict";
+
+// ==== LGTM core (pure logic — DOM-free, unit-tested in tests/) ====
+const LGTM = {
+  DEFAULT_TAGS: ["thumbs up", "lgtm", "ship it", "approved"],
+
+  // "a, b ,, c" -> ["a","b","c"]; empty/blank input falls back to defaults
+  parseTags(input, fallback) {
+    const parsed = String(input).split(",").map((t) => t.trim()).filter(Boolean);
+    return parsed.length > 0 ? parsed : [...fallback];
+  },
+
+  // Imported tag arrays may contain junk; keep only non-empty strings
+  sanitizeTags(arr) {
+    if (!Array.isArray(arr)) return [];
+    return arr.map((t) => String(t).trim()).filter(Boolean);
+  },
+
+  // downsized keeps links comment-friendly; fall back to original
+  gifUrl(gif) {
+    const imgs = (gif && gif.images) || {};
+    const pick = imgs.downsized_medium || imgs.downsized || imgs.original;
+    return (pick && pick.url) || "";
+  },
+
+  markdownFor(url) {
+    return "![LGTM](" + url + ")";
+  },
+
+  // Highest random offset worth requesting for a result set of `total`
+  offsetCeiling(total, batch, maxOffset) {
+    if (total === null) return maxOffset;
+    return Math.max(0, Math.min(maxOffset, total - batch));
+  },
+
+  // FNV-1a 32-bit — cheap deterministic hash for seeding the daily window
+  hashString(str) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return h >>> 0;
+  },
+
+  // Local-time "YYYY-MM-DD" — the seed rotates at the user's midnight
+  todayKey(date) {
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return date.getFullYear() + "-" + m + "-" + d;
+  },
+
+  // Deterministic fetch offset: hash(day + tag) anchors the day's window,
+  // `step` walks forward batch-by-batch (wrapping) as the pool is exhausted.
+  // Same day + tag -> same slice of Giphy's results; new day -> new slice.
+  windowOffset(tag, dayKey, step, total, batch, maxOffset) {
+    const ceiling = this.offsetCeiling(total, batch, maxOffset);
+    if (ceiling <= 0) return 0;
+    const base = this.hashString(dayKey + "|" + tag) % (ceiling + 1);
+    return (base + step * batch) % (ceiling + 1);
+  },
+
+  // Prefer gifs never shown before; only fall back to repeats when
+  // everything eligible has been seen already.
+  preferUnseen(candidates, seenIds) {
+    const unseen = candidates.filter((g) => !seenIds.has(g.id));
+    return unseen.length > 0 ? unseen : candidates;
+  },
+
+  // Keep the viewing history bounded (most recent entries win)
+  pruneSeen(seen, max) {
+    return seen.length > max ? seen.slice(seen.length - max) : seen;
+  },
+
+  // Gifs eligible to show: not denied, not the one already on screen
+  filterCandidates(gifs, deniedIds, currentId) {
+    return gifs.filter((g) => !deniedIds.has(g.id) && g.id !== currentId);
+  },
+
+  // Merge an imported denylist into the existing one: dedupe by id,
+  // drop malformed entries, coerce fields to strings. Returns a new array.
+  mergeDenylist(existing, imported) {
+    const merged = existing.slice();
+    const seen = new Set(existing.map((d) => d.id));
+    for (const d of Array.isArray(imported) ? imported : []) {
+      if (d && typeof d.id === "string" && d.id && !seen.has(d.id)) {
+        merged.push({ id: d.id, title: String(d.title || ""), preview: String(d.preview || "") });
+        seen.add(d.id);
+      }
+    }
+    return merged;
+  },
+};
+// ==== end LGTM core ====
+
+// ------------------------------------------------------------------
+// Config & storage
+// ------------------------------------------------------------------
+const LS_KEY  = "lgtm.apiKey";   // Giphy API key (user-supplied, this machine only)
+const LS_TAGS = "lgtm.tags";     // array of search tags
+const LS_DENY = "lgtm.denylist"; // array of {id, title, preview}
+const LS_SEEN = "lgtm.seen";     // ids shown recently, to avoid repeats across days
+const BATCH = 50;                // gifs fetched per API call
+const MAX_OFFSET = 4949;         // Giphy search caps offset+limit at ~5000
+const SEEN_MAX = 500;            // viewing-history cap
+
+const store = {
+  get(key, fallback) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw === null ? fallback : JSON.parse(raw);
+    } catch { return fallback; }
+  },
+  set(key, value) { localStorage.setItem(key, JSON.stringify(value)); },
+  remove(key) { localStorage.removeItem(key); },
+};
+
+let apiKey = store.get(LS_KEY, "");
+let tags = store.get(LS_TAGS, LGTM.DEFAULT_TAGS);
+let denylist = store.get(LS_DENY, []);
+let seen = store.get(LS_SEEN, []);
+let current = null;              // gif currently on screen
+const pools = new Map();         // tag -> {gifs: [], offsets: Set, total: number|null}
+
+// ------------------------------------------------------------------
+// DOM
+// ------------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const el = {
+  keyGate: $("keyGate"), keyGateInput: $("keyGateInput"), keyGateSave: $("keyGateSave"), keyGateError: $("keyGateError"),
+  app: $("app"), gifFrame: $("gifFrame"), gifImg: $("gifImg"), gifError: $("gifError"),
+  copyMd: $("copyMd"), copyUrl: $("copyUrl"), reroll: $("reroll"), deny: $("deny"),
+  tagsInput: $("tagsInput"),
+  keyInput: $("keyInput"), keySave: $("keySave"), keyForget: $("keyForget"),
+  denyCount: $("denyCount"), denyList: $("denyList"), denyEmpty: $("denyEmpty"),
+  clearDeny: $("clearDeny"), exportBtn: $("exportBtn"), importBtn: $("importBtn"), importFile: $("importFile"),
+  toast: $("toast"),
+};
+
+// ------------------------------------------------------------------
+// Toast
+// ------------------------------------------------------------------
+let toastTimer = null;
+function toast(msg) {
+  el.toast.textContent = msg;
+  el.toast.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.toast.classList.remove("show"), 1600);
+}
+
+// ------------------------------------------------------------------
+// Giphy API
+// ------------------------------------------------------------------
+async function searchGiphy(tag, offset) {
+  const url = new URL("https://api.giphy.com/v1/gifs/search");
+  url.search = new URLSearchParams({
+    api_key: apiKey,
+    q: tag,
+    limit: BATCH,
+    offset: offset,
+    rating: "g",
+    lang: "en",
+  });
+  const res = await fetch(url);
+  if (res.status === 401 || res.status === 403) {
+    const err = new Error("Giphy rejected the API key.");
+    err.badKey = true;
+    throw err;
+  }
+  if (res.status === 429) throw new Error("Giphy rate limit hit — wait a minute and try again.");
+  if (!res.ok) throw new Error("Giphy request failed (" + res.status + ").");
+  const body = await res.json();
+  return { gifs: body.data || [], total: body.pagination ? body.pagination.total_count : 0 };
+}
+
+// Fetch one more batch into the pool for a tag. The offset is seeded by
+// today's date, so the candidate set rotates daily instead of always being
+// the top of the results. Returns number of new gifs.
+async function growPool(tag) {
+  let pool = pools.get(tag);
+  if (!pool) { pool = { gifs: [], offsets: new Set(), total: null, step: 0 }; pools.set(tag, pool); }
+
+  const dayKey = LGTM.todayKey(new Date());
+  let added = 0;
+  // Up to 3 attempts: the first daily offset can overshoot a small result
+  // set (total unknown until Giphy responds); later tries use the real total.
+  for (let tries = 0; tries < 3 && added === 0; tries++) {
+    const offset = LGTM.windowOffset(tag, dayKey, pool.step, pool.total, BATCH, MAX_OFFSET);
+    pool.step++;
+    if (pool.offsets.has(offset)) continue;
+    pool.offsets.add(offset);
+
+    const { gifs, total } = await searchGiphy(tag, offset);
+    if (typeof total === "number" && total > 0) pool.total = total;
+
+    const known = new Set(pool.gifs.map((g) => g.id));
+    for (const g of gifs) {
+      if (!known.has(g.id)) { pool.gifs.push(g); known.add(g.id); added++; }
+    }
+  }
+  return added;
+}
+
+// ------------------------------------------------------------------
+// Picking
+// ------------------------------------------------------------------
+const deniedIds = () => new Set(denylist.map((d) => d.id));
+
+function candidatesFor(tag) {
+  const pool = pools.get(tag);
+  if (!pool) return [];
+  return LGTM.filterCandidates(pool.gifs, deniedIds(), current ? current.id : null);
+}
+
+async function pickGif() {
+  setLoading(true);
+  try {
+    const order = [...tags].sort(() => Math.random() - 0.5);
+    for (const tag of order) {
+      let cands = candidatesFor(tag);
+      // Grow the pool if we have nothing (or on a small random chance, for variety).
+      if (cands.length === 0 || Math.random() < 0.15) {
+        try { await growPool(tag); } catch (e) { if (e.badKey) throw e; /* try next tag */ }
+        cands = candidatesFor(tag);
+      }
+      if (cands.length > 0) {
+        cands = LGTM.preferUnseen(cands, new Set(seen));
+        showGif(cands[Math.floor(Math.random() * cands.length)]);
+        return;
+      }
+    }
+    showError("No gifs left for these tags — add more tags or trim your denylist in Settings.");
+  } catch (e) {
+    if (e.badKey) {
+      showError("Giphy rejected the API key. Update it below.");
+      openKeyGate("That key was rejected by Giphy — double-check it and try again.");
+    } else {
+      showError(e.message || "Something went wrong fetching gifs.");
+    }
+  } finally {
+    setLoading(false);
+  }
+}
+
+// ------------------------------------------------------------------
+// Rendering
+// ------------------------------------------------------------------
+function setLoading(on) {
+  el.gifFrame.classList.toggle("loading", on);
+  el.reroll.disabled = on;
+}
+
+function showGif(gif) {
+  current = gif;
+  el.gifError.classList.add("hidden");
+  el.gifImg.classList.remove("hidden");
+  el.gifImg.src = LGTM.gifUrl(gif);
+  el.gifImg.alt = gif.title || "LGTM gif";
+  if (!seen.includes(gif.id)) {
+    seen = LGTM.pruneSeen([...seen, gif.id], SEEN_MAX);
+    store.set(LS_SEEN, seen);
+  }
+}
+
+function showError(msg) {
+  current = null;
+  el.gifImg.classList.add("hidden");
+  el.gifError.textContent = msg;
+  el.gifError.classList.remove("hidden");
+}
+
+// ------------------------------------------------------------------
+// Copying
+// ------------------------------------------------------------------
+async function copyText(text, label) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Clipboard API can fail on old browsers / non-secure contexts
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  }
+  toast(label);
+}
+
+function requireCurrent() {
+  if (!current) { toast("No gif loaded yet"); return false; }
+  return true;
+}
+
+el.copyUrl.addEventListener("click", () => {
+  if (requireCurrent()) copyText(LGTM.gifUrl(current), "Copied gif URL");
+});
+el.copyMd.addEventListener("click", () => {
+  if (requireCurrent()) copyText(LGTM.markdownFor(LGTM.gifUrl(current)), "Copied markdown");
+});
+el.gifFrame.addEventListener("click", () => {
+  if (requireCurrent()) copyText(LGTM.markdownFor(LGTM.gifUrl(current)), "Copied markdown");
+});
+el.reroll.addEventListener("click", pickGif);
+
+// ------------------------------------------------------------------
+// Denylist
+// ------------------------------------------------------------------
+function saveDeny() {
+  store.set(LS_DENY, denylist);
+  renderDenylist();
+}
+
+el.deny.addEventListener("click", () => {
+  if (!requireCurrent()) return;
+  const imgs = current.images || {};
+  const still = imgs.fixed_height_small_still || imgs.fixed_width_small_still || {};
+  denylist.push({ id: current.id, title: current.title || "", preview: still.url || "" });
+  saveDeny();
+  toast("Won't show that one again");
+  pickGif();
+});
+
+function renderDenylist() {
+  el.denyCount.textContent = denylist.length;
+  el.denyList.replaceChildren();
+  el.denyEmpty.classList.toggle("hidden", denylist.length > 0);
+  for (const entry of denylist) {
+    const li = document.createElement("li");
+    if (entry.preview) {
+      const img = document.createElement("img");
+      img.src = entry.preview;
+      img.alt = "";
+      img.loading = "lazy";
+      li.appendChild(img);
+    }
+    const span = document.createElement("span");
+    span.className = "deny-title";
+    span.textContent = entry.title || entry.id;
+    li.appendChild(span);
+    const rm = document.createElement("button");
+    rm.className = "small";
+    rm.textContent = "Allow again";
+    rm.addEventListener("click", () => {
+      denylist = denylist.filter((d) => d.id !== entry.id);
+      saveDeny();
+    });
+    li.appendChild(rm);
+    el.denyList.appendChild(li);
+  }
+}
+
+el.clearDeny.addEventListener("click", () => {
+  if (denylist.length === 0) return;
+  if (!confirm("Clear all " + denylist.length + " denied gifs?")) return;
+  denylist = [];
+  saveDeny();
+  toast("Denylist cleared");
+});
+
+// ------------------------------------------------------------------
+// Export / import
+// ------------------------------------------------------------------
+el.exportBtn.addEventListener("click", () => {
+  const payload = { version: 1, tags, denylist };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "lgtm-settings.json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast("Exported settings");
+});
+
+el.importBtn.addEventListener("click", () => el.importFile.click());
+el.importFile.addEventListener("change", async () => {
+  const file = el.importFile.files[0];
+  el.importFile.value = "";
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (Array.isArray(data.denylist)) {
+      denylist = LGTM.mergeDenylist(denylist, data.denylist);
+      saveDeny();
+    }
+    const importedTags = LGTM.sanitizeTags(data.tags);
+    if (importedTags.length > 0) {
+      tags = importedTags;
+      store.set(LS_TAGS, tags);
+      el.tagsInput.value = tags.join(", ");
+      pools.clear();
+    }
+    toast("Imported settings");
+  } catch {
+    toast("Couldn't read that file — expected LGTM JSON export");
+  }
+});
+
+// ------------------------------------------------------------------
+// Tags
+// ------------------------------------------------------------------
+el.tagsInput.value = tags.join(", ");
+el.tagsInput.addEventListener("change", () => {
+  tags = LGTM.parseTags(el.tagsInput.value, LGTM.DEFAULT_TAGS);
+  el.tagsInput.value = tags.join(", ");
+  store.set(LS_TAGS, tags);
+  toast("Tags saved");
+});
+
+// ------------------------------------------------------------------
+// API key management
+// ------------------------------------------------------------------
+function openKeyGate(errorMsg) {
+  el.keyGate.classList.remove("hidden");
+  el.keyGateError.classList.toggle("hidden", !errorMsg);
+  el.keyGateError.textContent = errorMsg || "";
+  el.keyGateInput.focus();
+}
+
+async function trySetKey(candidate, sourceInput) {
+  const key = candidate.trim();
+  if (!key) { toast("Enter a key first"); return; }
+  apiKey = key;
+  // Validate with a minimal call before persisting.
+  try {
+    await searchGiphy("test", 0);
+  } catch (e) {
+    apiKey = store.get(LS_KEY, "");
+    if (e.badKey) {
+      if (sourceInput === el.keyGateInput) openKeyGate("Giphy rejected that key — check for typos.");
+      else toast("Giphy rejected that key");
+      return;
+    }
+    // Network or other failure: keep the key anyway, it may just be offline.
+    apiKey = key;
+  }
+  store.set(LS_KEY, apiKey);
+  el.keyGate.classList.add("hidden");
+  el.keyGateError.classList.add("hidden");
+  el.app.classList.remove("hidden");
+  el.keyInput.value = apiKey;
+  pools.clear();
+  toast("API key saved");
+  pickGif();
+}
+
+el.keyGateSave.addEventListener("click", () => trySetKey(el.keyGateInput.value, el.keyGateInput));
+el.keyGateInput.addEventListener("keydown", (e) => { if (e.key === "Enter") trySetKey(el.keyGateInput.value, el.keyGateInput); });
+el.keySave.addEventListener("click", () => trySetKey(el.keyInput.value, el.keyInput));
+el.keyForget.addEventListener("click", () => {
+  apiKey = "";
+  store.remove(LS_KEY);
+  el.keyInput.value = "";
+  el.app.classList.add("hidden");
+  openKeyGate();
+  toast("API key forgotten");
+});
+
+// ------------------------------------------------------------------
+// Boot
+// ------------------------------------------------------------------
+renderDenylist();
+if (apiKey) {
+  el.app.classList.remove("hidden");
+  el.keyInput.value = apiKey;
+  pickGif();
+} else {
+  setLoading(false);
+  openKeyGate();
+}
+</script>
+</body>
+</html>
