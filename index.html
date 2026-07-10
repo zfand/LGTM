@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LGTM — gif picker for code reviews</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%F0%9F%91%8D</text></svg>">
 <style>
   :root {
     --bg: #f6f7f9;
@@ -185,11 +186,30 @@
 
   .hidden { display: none !important; }
 
+  /* --- border decorations --- */
+  #decor {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    user-select: none;
+    z-index: -1;
+  }
+  #decor span {
+    position: absolute;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+  }
+  @media (max-width: 859px) { #decor { display: none; } }
+
   footer { margin-top: 28px; font-size: 12.5px; color: var(--muted); }
   footer a { color: inherit; }
 </style>
 </head>
 <body>
+
+<div id="decor" aria-hidden="true"></div>
 
 <header>
   <h1>LGTM <span class="check">✓</span></h1>
@@ -847,8 +867,53 @@ el.keyForget.addEventListener("click", () => {
 });
 
 // ------------------------------------------------------------------
+// Border decorations — emoji + review slang scattered around the edges
+// ------------------------------------------------------------------
+const DECOR_ITEMS = [
+  "👍", "✅", "🚀", "🎉", "🚢", "💯", "🔥", "👏", "⭐", "🙌", "💚", "🥳", "👍", "✅",
+  "LGTM", "SHIP IT", "APPROVED", "+1", "MERGE IT", "NICE", ":shipit:",
+  "LGTM!", "GG", "SEND IT", "10/10", "WFM", "no notes", "chef's kiss",
+];
+const DECOR_COLORS = ["#1f883d", "#6a737d", "#9a6700", "#0969da", "#8250df"];
+
+function decorate() {
+  const box = $("decor");
+  box.replaceChildren();
+  const slots = [];
+  // top & bottom strips (the middle is skipped so nothing sits behind the header)
+  for (let i = 0; i < 8; i++) {
+    const x = i < 4 ? 2 + i * 6 : 78 + (i - 4) * 5.5;
+    slots.push({ left: x + "%", top: 4 + Math.random() * 42 + "px" });
+    slots.push({ left: x + 3 + "%", bottom: 4 + Math.random() * 42 + "px" });
+  }
+  // left & right columns
+  for (let i = 0; i < 6; i++) {
+    const y = 12 + i * 13 + Math.random() * 5;
+    slots.push({ left: 10 + Math.random() * 42 + "px", top: y + "%" });
+    slots.push({ right: 10 + Math.random() * 42 + "px", top: y + 6 + "%" });
+  }
+  const items = [...DECOR_ITEMS, ...DECOR_ITEMS]
+    .sort(() => Math.random() - 0.5)
+    .slice(0, slots.length);
+  slots.forEach((pos, i) => {
+    const s = document.createElement("span");
+    s.textContent = items[i];
+    const isEmoji = /\p{Extended_Pictographic}/u.test(items[i]);
+    s.style.fontSize = (isEmoji ? 18 + Math.random() * 16 : 11 + Math.random() * 5) + "px";
+    s.style.opacity = (0.16 + Math.random() * 0.24).toFixed(2);
+    s.style.transform = "rotate(" + (Math.random() * 28 - 14).toFixed(1) + "deg)";
+    if (!isEmoji) s.style.color = DECOR_COLORS[i % DECOR_COLORS.length];
+    for (const side of ["left", "right", "top", "bottom"]) {
+      if (pos[side] !== undefined) s.style[side] = pos[side];
+    }
+    box.appendChild(s);
+  });
+}
+
+// ------------------------------------------------------------------
 // Boot
 // ------------------------------------------------------------------
+decorate();
 renderDenylist();
 if (apiKey) {
   el.app.classList.remove("hidden");
