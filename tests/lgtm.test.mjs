@@ -151,6 +151,52 @@ describe("offsetCeiling", () => {
   });
 });
 
+describe("updateDepth", () => {
+  test("first response adopts the reported total", () => {
+    assert.equal(LGTM.updateDepth(null, 30000, 1200, true), 30000);
+  });
+  test("an empty page proves the results end at or before that offset", () => {
+    // Giphy reports 30000 but 200s with no data at offset 3800
+    assert.equal(LGTM.updateDepth(null, 30000, 3800, false), 3800);
+    assert.equal(LGTM.updateDepth(30000, 30000, 3800, false), 3800);
+  });
+  test("depth only ratchets down — a later inflated total_count cannot raise it", () => {
+    assert.equal(LGTM.updateDepth(250, 30000, 0, true), 250);
+  });
+  test("an empty first page means the tag has nothing", () => {
+    assert.equal(LGTM.updateDepth(null, 0, 0, false), 0);
+  });
+  test("non-numeric reported total is ignored", () => {
+    assert.equal(LGTM.updateDepth(500, undefined, 100, true), 500);
+    assert.equal(LGTM.updateDepth(null, "many", 100, true), null);
+  });
+  test("shrunken depth pulls the next window below the failed offset", () => {
+    // day-seeded offset overshot at 3800 -> depth 3800 -> every later
+    // window must land at or below 3800 - batch
+    const depth = LGTM.updateDepth(30000, 30000, 3800, false);
+    const ceiling = LGTM.offsetCeiling(depth, 50, 4949);
+    assert.equal(ceiling, 3750);
+    for (let step = 0; step < 50; step++) {
+      const off = LGTM.windowOffset("thumbs up", "2026-07-10", step, depth, 50, 4949);
+      assert.ok(off <= ceiling, `offset ${off} above shrunken ceiling ${ceiling}`);
+    }
+  });
+});
+
+describe("sanitizeDepths", () => {
+  test("keeps only non-negative integer depths", () => {
+    assert.deepEqual(
+      LGTM.sanitizeDepths({ lgtm: 250, "ship it": 0, bad1: -5, bad2: 1.5, bad3: "250", bad4: null }),
+      { lgtm: 250, "ship it": 0 }
+    );
+  });
+  test("garbage input yields an empty map", () => {
+    assert.deepEqual(LGTM.sanitizeDepths(null), {});
+    assert.deepEqual(LGTM.sanitizeDepths("junk"), {});
+    assert.deepEqual(LGTM.sanitizeDepths([1, 2]), {});
+  });
+});
+
 describe("hashString", () => {
   test("is deterministic", () => {
     assert.equal(LGTM.hashString("lgtm"), LGTM.hashString("lgtm"));

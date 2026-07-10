@@ -313,6 +313,19 @@ const LGTM = {
     };
   },
 
+  // Validate the persisted per-tag depth map ({tag: int}). Depth is a
+  // property of the tag — how deep Giphy actually serves results — so it
+  // survives the daily cache rotation, keeping daily windows inside real
+  // results without re-learning (and re-spending quota) every day.
+  sanitizeDepths(raw) {
+    const clean = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return clean;
+    for (const [tag, d] of Object.entries(raw)) {
+      if (Number.isInteger(d) && d >= 0) clean[tag] = d;
+    }
+    return clean;
+  },
+
   // Validate a persisted pool cache. Anything malformed or from another
   // day collapses to an empty cache for `dayKey` — the daily window
   // rotation must not serve yesterday's slices.
@@ -335,6 +348,21 @@ const LGTM = {
   offsetCeiling(total, batch, maxOffset) {
     if (total === null) return maxOffset;
     return Math.max(0, Math.min(maxOffset, total - batch));
+  },
+
+  // Track how deep a tag's results actually go. Giphy's total_count
+  // overstates it — requests beyond the real depth return 200 with an
+  // empty data array — so depth only ever ratchets DOWN: an empty page
+  // at `offset` proves the results end at or before it.
+  updateDepth(prev, reported, offset, gotAny) {
+    let depth = prev;
+    if (typeof reported === "number" && reported > 0) {
+      depth = depth === null ? reported : Math.min(depth, reported);
+    }
+    if (!gotAny) {
+      depth = depth === null ? offset : Math.min(depth, offset);
+    }
+    return depth;
   },
 
   // FNV-1a 32-bit — cheap deterministic hash for seeding the daily window
@@ -405,6 +433,7 @@ const LS_TAGS = "lgtm.tags";     // array of search tags
 const LS_DENY = "lgtm.denylist"; // array of {id, title, preview}
 const LS_SEEN = "lgtm.seen";     // ids shown recently, to avoid repeats across days
 const LS_CACHE = "lgtm.cache";   // today's fetched pools, shared across tabs/reloads
+const LS_DEPTHS = "lgtm.depths"; // per-tag real result depth learned from empty pages
 const BATCH = 50;                // gifs fetched per API call
 const MAX_OFFSET = 4949;         // Giphy search caps offset+limit at ~5000
 const SEEN_MAX = 500;            // viewing-history cap
@@ -427,6 +456,7 @@ let apiKey = store.get(LS_KEY, "");
 let tags = store.get(LS_TAGS, LGTM.DEFAULT_TAGS);
 let denylist = store.get(LS_DENY, []);
 let seen = store.get(LS_SEEN, []);
+const depths = LGTM.sanitizeDepths(store.get(LS_DEPTHS, {}));
 let current = null;              // gif currently on screen
 const pools = new Map();         // tag -> {gifs: [slim], offsets: Set, total: number|null, step}
 
@@ -486,7 +516,18 @@ async function searchGiphy(tag, offset) {
     rating: "g",
     lang: "en",
   });
-  const res = await fetch(url);
+  let res;
+  try {
+    res = await fetch(url);
+  } catch {
+    // fetch() only rejects when the request never completed — for a same-page
+    // https API that almost always means it was blocked client-side.
+    throw new Error(
+      "Couldn't reach Giphy — an ad blocker or the browser's tracking protection " +
+      "is likely blocking api.giphy.com (private/incognito windows block more by default). " +
+      "Allow giphy.com for this site and try again."
+    );
+  }
   if (res.status === 401 || res.status === 403) {
     const err = new Error("Giphy rejected the API key.");
     err.badKey = true;
@@ -503,26 +544,45 @@ async function searchGiphy(tag, offset) {
 // the top of the results. Returns number of new gifs.
 async function growPool(tag) {
   let pool = pools.get(tag);
-  if (!pool) { pool = { gifs: [], offsets: new Set(), total: null, step: 0 }; pools.set(tag, pool); }
+  if (!pool) {
+    pool = { gifs: [], offsets: new Set(), total: tag in depths ? depths[tag] : null, step: 0 };
+    pools.set(tag, pool);
+  }
+
+  const merge = (gifs) => {
+    const known = new Set(pool.gifs.map((g) => g.id));
+    let n = 0;
+    for (const g of gifs) {
+      const slim = LGTM.slimGif(g);
+      if (slim.url && !known.has(slim.id)) { pool.gifs.push(slim); known.add(slim.id); n++; }
+    }
+    return n;
+  };
+  const fetchAt = async (offset) => {
+    pool.offsets.add(offset);
+    const { gifs, total } = await searchGiphy(tag, offset);
+    pool.total = LGTM.updateDepth(pool.total, total, offset, gifs.length > 0);
+    if (pool.total !== null && depths[tag] !== pool.total) {
+      depths[tag] = pool.total;
+      store.set(LS_DEPTHS, depths);
+    }
+    return merge(gifs);
+  };
 
   const dayKey = LGTM.todayKey(new Date());
   let added = 0;
-  // Up to 3 attempts: the first daily offset can overshoot a small result
-  // set (total unknown until Giphy responds); later tries use the real total.
+  // The daily offset can land beyond the depth Giphy will actually serve
+  // (its total_count overstates it; deep pages 200 with empty data). Each
+  // empty page ratchets pool.total down, aiming the next window lower.
   for (let tries = 0; tries < 3 && added === 0; tries++) {
     const offset = LGTM.windowOffset(tag, dayKey, pool.step, pool.total, BATCH, MAX_OFFSET);
     pool.step++;
     if (pool.offsets.has(offset)) continue;
-    pool.offsets.add(offset);
-
-    const { gifs, total } = await searchGiphy(tag, offset);
-    if (typeof total === "number" && total > 0) pool.total = total;
-
-    const known = new Set(pool.gifs.map((g) => g.id));
-    for (const g of gifs) {
-      const slim = LGTM.slimGif(g);
-      if (slim.url && !known.has(slim.id)) { pool.gifs.push(slim); known.add(slim.id); added++; }
-    }
+    added += await fetchAt(offset);
+  }
+  // Guaranteed fallback: the first page always has gifs if the tag has any.
+  if (added === 0 && !pool.offsets.has(0)) {
+    added += await fetchAt(0);
   }
   saveCache();
   return added;
