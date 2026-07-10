@@ -200,7 +200,13 @@
     font-weight: 800;
     letter-spacing: 0.5px;
     white-space: nowrap;
+    animation: bob var(--dur, 4s) ease-in-out var(--delay, 0s) infinite alternate;
   }
+  @keyframes bob {
+    from { transform: translateY(0) rotate(var(--rot, 0deg)); }
+    to   { transform: translateY(var(--amp, -8px)) rotate(var(--rot, 0deg)); }
+  }
+  @media (prefers-reduced-motion: reduce) { #decor span { animation: none; } }
   @media (max-width: 859px) { #decor { display: none; } }
 
   footer { margin-top: 28px; font-size: 12.5px; color: var(--muted); }
@@ -901,7 +907,10 @@ function decorate() {
     const isEmoji = /\p{Extended_Pictographic}/u.test(items[i]);
     s.style.fontSize = (isEmoji ? 18 + Math.random() * 16 : 11 + Math.random() * 5) + "px";
     s.style.opacity = (0.16 + Math.random() * 0.24).toFixed(2);
-    s.style.transform = "rotate(" + (Math.random() * 28 - 14).toFixed(1) + "deg)";
+    s.style.setProperty("--rot", (Math.random() * 28 - 14).toFixed(1) + "deg");
+    s.style.setProperty("--amp", -(5 + Math.random() * 9).toFixed(1) + "px");
+    s.style.setProperty("--dur", (2.8 + Math.random() * 3.4).toFixed(2) + "s");
+    s.style.setProperty("--delay", (-Math.random() * 6).toFixed(2) + "s");
     if (!isEmoji) s.style.color = DECOR_COLORS[i % DECOR_COLORS.length];
     for (const side of ["left", "right", "top", "bottom"]) {
       if (pos[side] !== undefined) s.style[side] = pos[side];
