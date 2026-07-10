@@ -63,6 +63,73 @@ describe("gifUrl", () => {
   });
 });
 
+describe("stillUrl", () => {
+  test("prefers fixed_height_small_still, falls back to fixed_width_small_still", () => {
+    const gif = { images: {
+      fixed_width_small_still: { url: "w" },
+      fixed_height_small_still: { url: "h" },
+    } };
+    assert.equal(LGTM.stillUrl(gif), "h");
+    delete gif.images.fixed_height_small_still;
+    assert.equal(LGTM.stillUrl(gif), "w");
+    assert.equal(LGTM.stillUrl({}), "");
+  });
+});
+
+describe("slimGif", () => {
+  test("keeps only the fields the app needs", () => {
+    const slim = LGTM.slimGif({
+      id: "x1",
+      title: "Nice",
+      rating: "g",
+      images: {
+        downsized_medium: { url: "big.gif", width: "480" },
+        fixed_height_small_still: { url: "small.gif" },
+      },
+      user: { huge: "object" },
+    });
+    assert.deepEqual(slim, { id: "x1", title: "Nice", url: "big.gif", preview: "small.gif" });
+  });
+  test("missing optional fields become empty strings", () => {
+    assert.deepEqual(LGTM.slimGif({ id: "x2", images: { original: { url: "o" } } }),
+      { id: "x2", title: "", url: "o", preview: "" });
+  });
+});
+
+describe("sanitizeCache", () => {
+  const day = "2026-07-10";
+  const goodPool = { gifs: [{ id: "a", url: "u", title: "", preview: "" }], offsets: [50, 100], total: 3000, step: 2 };
+
+  test("passes through a valid same-day cache", () => {
+    const out = LGTM.sanitizeCache({ day, pools: { lgtm: goodPool } }, day);
+    assert.deepEqual(out.pools.lgtm.gifs.map((g) => g.id), ["a"]);
+    assert.deepEqual(out.pools.lgtm.offsets, [50, 100]);
+    assert.equal(out.pools.lgtm.total, 3000);
+    assert.equal(out.pools.lgtm.step, 2);
+  });
+  test("a cache from another day is discarded", () => {
+    const out = LGTM.sanitizeCache({ day: "2026-07-09", pools: { lgtm: goodPool } }, day);
+    assert.deepEqual(out, { day, pools: {} });
+  });
+  test("null / garbage input yields an empty cache", () => {
+    assert.deepEqual(LGTM.sanitizeCache(null, day), { day, pools: {} });
+    assert.deepEqual(LGTM.sanitizeCache("junk", day), { day, pools: {} });
+    assert.deepEqual(LGTM.sanitizeCache({ day, pools: "junk" }, day), { day, pools: {} });
+  });
+  test("malformed pools and entries are dropped, valid ones kept", () => {
+    const out = LGTM.sanitizeCache({ day, pools: {
+      bad1: null,
+      bad2: { gifs: "nope", offsets: [] },
+      ok: { gifs: [null, { id: 5 }, { id: "a" }, { id: "b", url: "u" }], offsets: [1, "x", 2], total: "many", step: "x" },
+    } }, day);
+    assert.deepEqual(Object.keys(out.pools), ["ok"]);
+    assert.deepEqual(out.pools.ok.gifs.map((g) => g.id), ["b"]);
+    assert.deepEqual(out.pools.ok.offsets, [1, 2]);
+    assert.equal(out.pools.ok.total, null);
+    assert.equal(out.pools.ok.step, 0);
+  });
+});
+
 describe("markdownFor", () => {
   test("wraps the url in LGTM image markdown", () => {
     assert.equal(LGTM.markdownFor("https://x/y.gif"), "![LGTM](https://x/y.gif)");

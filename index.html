@@ -295,6 +295,42 @@ const LGTM = {
     return "![LGTM](" + url + ")";
   },
 
+  // Small static thumbnail, used for denylist previews
+  stillUrl(gif) {
+    const imgs = (gif && gif.images) || {};
+    const pick = imgs.fixed_height_small_still || imgs.fixed_width_small_still;
+    return (pick && pick.url) || "";
+  },
+
+  // Reduce a raw Giphy API object to the few fields the app needs —
+  // full objects are ~10KB each, far too big to cache in localStorage.
+  slimGif(gif) {
+    return {
+      id: gif.id,
+      title: gif.title || "",
+      url: this.gifUrl(gif),
+      preview: this.stillUrl(gif),
+    };
+  },
+
+  // Validate a persisted pool cache. Anything malformed or from another
+  // day collapses to an empty cache for `dayKey` — the daily window
+  // rotation must not serve yesterday's slices.
+  sanitizeCache(raw, dayKey) {
+    const clean = { day: dayKey, pools: {} };
+    if (!raw || raw.day !== dayKey || !raw.pools || typeof raw.pools !== "object") return clean;
+    for (const [tag, p] of Object.entries(raw.pools)) {
+      if (!p || !Array.isArray(p.gifs) || !Array.isArray(p.offsets)) continue;
+      clean.pools[tag] = {
+        gifs: p.gifs.filter((g) => g && typeof g.id === "string" && typeof g.url === "string"),
+        offsets: p.offsets.filter((o) => Number.isInteger(o)),
+        total: typeof p.total === "number" ? p.total : null,
+        step: Number.isInteger(p.step) ? p.step : 0,
+      };
+    }
+    return clean;
+  },
+
   // Highest random offset worth requesting for a result set of `total`
   offsetCeiling(total, batch, maxOffset) {
     if (total === null) return maxOffset;
@@ -368,6 +404,7 @@ const LS_KEY  = "lgtm.apiKey";   // Giphy API key (user-supplied, this machine o
 const LS_TAGS = "lgtm.tags";     // array of search tags
 const LS_DENY = "lgtm.denylist"; // array of {id, title, preview}
 const LS_SEEN = "lgtm.seen";     // ids shown recently, to avoid repeats across days
+const LS_CACHE = "lgtm.cache";   // today's fetched pools, shared across tabs/reloads
 const BATCH = 50;                // gifs fetched per API call
 const MAX_OFFSET = 4949;         // Giphy search caps offset+limit at ~5000
 const SEEN_MAX = 500;            // viewing-history cap
@@ -379,7 +416,10 @@ const store = {
       return raw === null ? fallback : JSON.parse(raw);
     } catch { return fallback; }
   },
-  set(key, value) { localStorage.setItem(key, JSON.stringify(value)); },
+  set(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); }
+    catch { /* quota exceeded / private mode — persistence is best-effort */ }
+  },
   remove(key) { localStorage.removeItem(key); },
 };
 
@@ -388,7 +428,24 @@ let tags = store.get(LS_TAGS, LGTM.DEFAULT_TAGS);
 let denylist = store.get(LS_DENY, []);
 let seen = store.get(LS_SEEN, []);
 let current = null;              // gif currently on screen
-const pools = new Map();         // tag -> {gifs: [], offsets: Set, total: number|null}
+const pools = new Map();         // tag -> {gifs: [slim], offsets: Set, total: number|null, step}
+
+// Warm the pools from today's cache so a second tab (or a reload) reuses
+// what another tab already fetched instead of spending API quota again.
+{
+  const cached = LGTM.sanitizeCache(store.get(LS_CACHE, null), LGTM.todayKey(new Date()));
+  for (const [tag, p] of Object.entries(cached.pools)) {
+    pools.set(tag, { gifs: p.gifs, offsets: new Set(p.offsets), total: p.total, step: p.step });
+  }
+}
+
+function saveCache() {
+  const obj = {};
+  for (const [tag, p] of pools) {
+    obj[tag] = { gifs: p.gifs.slice(-300), offsets: [...p.offsets], total: p.total, step: p.step };
+  }
+  store.set(LS_CACHE, { day: LGTM.todayKey(new Date()), pools: obj });
+}
 
 // ------------------------------------------------------------------
 // DOM
@@ -463,9 +520,11 @@ async function growPool(tag) {
 
     const known = new Set(pool.gifs.map((g) => g.id));
     for (const g of gifs) {
-      if (!known.has(g.id)) { pool.gifs.push(g); known.add(g.id); added++; }
+      const slim = LGTM.slimGif(g);
+      if (slim.url && !known.has(slim.id)) { pool.gifs.push(slim); known.add(slim.id); added++; }
     }
   }
+  saveCache();
   return added;
 }
 
@@ -483,12 +542,13 @@ function candidatesFor(tag) {
 async function pickGif() {
   setLoading(true);
   try {
+    let fetchError = null;
     const order = [...tags].sort(() => Math.random() - 0.5);
     for (const tag of order) {
       let cands = candidatesFor(tag);
       // Grow the pool if we have nothing (or on a small random chance, for variety).
       if (cands.length === 0 || Math.random() < 0.15) {
-        try { await growPool(tag); } catch (e) { if (e.badKey) throw e; /* try next tag */ }
+        try { await growPool(tag); } catch (e) { if (e.badKey) throw e; fetchError = e; /* try next tag */ }
         cands = candidatesFor(tag);
       }
       if (cands.length > 0) {
@@ -497,6 +557,8 @@ async function pickGif() {
         return;
       }
     }
+    // Distinguish "Giphy is refusing us" from "we genuinely ran out"
+    if (fetchError) throw fetchError;
     showError("No gifs left for these tags — add more tags or trim your denylist in Settings.");
   } catch (e) {
     if (e.badKey) {
@@ -522,7 +584,7 @@ function showGif(gif) {
   current = gif;
   el.gifError.classList.add("hidden");
   el.gifImg.classList.remove("hidden");
-  el.gifImg.src = LGTM.gifUrl(gif);
+  el.gifImg.src = gif.url;
   el.gifImg.alt = gif.title || "LGTM gif";
   if (!seen.includes(gif.id)) {
     seen = LGTM.pruneSeen([...seen, gif.id], SEEN_MAX);
@@ -563,13 +625,13 @@ function requireCurrent() {
 }
 
 el.copyUrl.addEventListener("click", () => {
-  if (requireCurrent()) copyText(LGTM.gifUrl(current), "Copied gif URL");
+  if (requireCurrent()) copyText(current.url, "Copied gif URL");
 });
 el.copyMd.addEventListener("click", () => {
-  if (requireCurrent()) copyText(LGTM.markdownFor(LGTM.gifUrl(current)), "Copied markdown");
+  if (requireCurrent()) copyText(LGTM.markdownFor(current.url), "Copied markdown");
 });
 el.gifFrame.addEventListener("click", () => {
-  if (requireCurrent()) copyText(LGTM.markdownFor(LGTM.gifUrl(current)), "Copied markdown");
+  if (requireCurrent()) copyText(LGTM.markdownFor(current.url), "Copied markdown");
 });
 el.reroll.addEventListener("click", pickGif);
 
@@ -583,9 +645,7 @@ function saveDeny() {
 
 el.deny.addEventListener("click", () => {
   if (!requireCurrent()) return;
-  const imgs = current.images || {};
-  const still = imgs.fixed_height_small_still || imgs.fixed_width_small_still || {};
-  denylist.push({ id: current.id, title: current.title || "", preview: still.url || "" });
+  denylist.push({ id: current.id, title: current.title || "", preview: current.preview || "" });
   saveDeny();
   toast("Won't show that one again");
   pickGif();
