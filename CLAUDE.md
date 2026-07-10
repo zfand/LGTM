@@ -25,7 +25,9 @@ There is no build step, no package.json, and no dependencies (tests use only Nod
 ## Conventions in index.html
 
 - The script starts with a marked block (`// ==== LGTM core` … `// ==== end LGTM core`) holding all pure, DOM-free logic as the `LGTM` object. The tests extract this block by its markers and eval it in Node, so: keep the markers intact, keep the block free of DOM/`fetch`/`localStorage` references, and put any new testable logic inside it.
-- localStorage keys are namespaced `lgtm.*` (`lgtm.apiKey`, `lgtm.tags`, `lgtm.denylist`, `lgtm.seen`) and read/written through the `store` helper.
+- localStorage keys are namespaced `lgtm.*` (`lgtm.apiKey`, `lgtm.tags`, `lgtm.denylist`, `lgtm.seen`, `lgtm.cache`) and read/written through the `store` helper.
+- Pools hold **slim** gif objects (`LGTM.slimGif`: `{id, title, url, preview}`), never raw Giphy API objects.
+- Fetched pools are persisted to a day-scoped cache (`lgtm.cache`, validated by `LGTM.sanitizeCache`) so extra tabs and reloads reuse them instead of spending API quota — free Giphy keys are rate-limited per hour and the quota is shared across tabs. Don't remove this cache.
 - Denylist entries are `{id, title, preview}` objects, not bare IDs — the preview/title make the settings list readable.
 - API responses are cached per tag in the `pools` Map. Fetch offsets are **seeded by the local date** (`LGTM.windowOffset`): same day + tag → same slice of Giphy results, next day → a different slice. A capped viewing history (`lgtm.seen`, `LGTM.preferUnseen`) avoids repeats across days. Don't regress this to always fetching offset 0 — variety over months of reviews is a core requirement.
 - Never inject API-sourced strings via `innerHTML` — use `textContent` / `createElement` (gif titles are untrusted).
