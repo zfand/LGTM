@@ -250,6 +250,43 @@ describe("windowOffset", () => {
   });
 });
 
+describe("bounceStep", () => {
+  const item = (over) => ({ x: 50, y: 50, vx: 10, vy: 20, w: 20, h: 10, ...over });
+
+  test("moves linearly when away from the edges", () => {
+    assert.deepEqual(LGTM.bounceStep(item(), 200, 200, 1), { x: 60, y: 70, vx: 10, vy: 20 });
+  });
+  test("bounces off the right edge and flips vx", () => {
+    // maxX = 200 - 20 = 180; from 175 moving +10 -> pinned at 180, vx flipped
+    const out = LGTM.bounceStep(item({ x: 175 }), 200, 200, 1);
+    assert.equal(out.x, 180);
+    assert.equal(out.vx, -10);
+  });
+  test("bounces off the left and top edges", () => {
+    const out = LGTM.bounceStep(item({ x: 3, y: 4, vx: -10, vy: -20 }), 200, 200, 1);
+    assert.deepEqual(out, { x: 0, y: 0, vx: 10, vy: 20 });
+  });
+  test("bounces off the bottom edge and flips vy", () => {
+    // maxY = 200 - 10 = 190
+    const out = LGTM.bounceStep(item({ y: 185 }), 200, 200, 1);
+    assert.equal(out.y, 190);
+    assert.equal(out.vy, -20);
+  });
+  test("a window shrink pulls items back inside the new bounds", () => {
+    // was at x=500 on a wide window; window resized to 100 wide -> maxX = 80
+    const out = LGTM.bounceStep(item({ x: 500 }), 100, 200, 0);
+    assert.equal(out.x, 80);
+    assert.equal(out.vx, -10); // heading back inward
+  });
+  test("an item larger than the window pins to the origin", () => {
+    const out = LGTM.bounceStep(item({ x: 30, w: 300 }), 100, 200, 1);
+    assert.equal(out.x, 0);
+  });
+  test("dt=0 leaves an in-bounds item exactly where it was", () => {
+    assert.deepEqual(LGTM.bounceStep(item(), 200, 200, 0), { x: 50, y: 50, vx: 10, vy: 20 });
+  });
+});
+
 describe("filterCandidates", () => {
   const gifs = [{ id: "a" }, { id: "b" }, { id: "c" }];
   test("removes denied ids and the current gif", () => {

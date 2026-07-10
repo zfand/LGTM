@@ -197,17 +197,13 @@
   }
   #decor span {
     position: absolute;
+    left: 0;
+    top: 0;
     font-weight: 800;
     letter-spacing: 0.5px;
     white-space: nowrap;
-    animation: bob var(--dur, 4s) ease-in-out var(--delay, 0s) infinite alternate;
+    will-change: transform;
   }
-  @keyframes bob {
-    from { transform: translateY(0) rotate(var(--rot, 0deg)); }
-    to   { transform: translateY(var(--amp, -8px)) rotate(var(--rot, 0deg)); }
-  }
-  @media (prefers-reduced-motion: reduce) { #decor span { animation: none; } }
-  @media (max-width: 859px) { #decor { display: none; } }
 
   footer { margin-top: 28px; font-size: 12.5px; color: var(--muted); }
   footer a { color: inherit; }
@@ -416,6 +412,23 @@ const LGTM = {
     if (ceiling <= 0) return 0;
     const base = this.hashString(dayKey + "|" + tag) % (ceiling + 1);
     return (base + step * batch) % (ceiling + 1);
+  },
+
+  // Advance a bouncing decoration by dt seconds inside a W×H box:
+  // move by velocity, reflect off the edges, clamp inside the bounds
+  // (which also handles the box shrinking on a window resize).
+  bounceStep(o, W, H, dt) {
+    const maxX = Math.max(0, W - o.w);
+    const maxY = Math.max(0, H - o.h);
+    let x = o.x + o.vx * dt;
+    let y = o.y + o.vy * dt;
+    let vx = o.vx;
+    let vy = o.vy;
+    if (x < 0) { x = 0; vx = Math.abs(vx); }
+    else if (x > maxX) { x = maxX; vx = -Math.abs(vx); }
+    if (y < 0) { y = 0; vy = Math.abs(vy); }
+    else if (y > maxY) { y = maxY; vy = -Math.abs(vy); }
+    return { x, y, vx, vy };
   },
 
   // Prefer gifs never shown before; only fall back to repeats when
@@ -873,7 +886,8 @@ el.keyForget.addEventListener("click", () => {
 });
 
 // ------------------------------------------------------------------
-// Border decorations — emoji + review slang scattered around the edges
+// Background decorations — emoji + review slang drifting across the
+// whole viewport, bouncing off the window edges
 // ------------------------------------------------------------------
 const DECOR_ITEMS = [
   "👍", "✅", "🚀", "🎉", "🚢", "💯", "🔥", "👏", "⭐", "🙌", "💚", "🥳", "👍", "✅",
@@ -881,48 +895,90 @@ const DECOR_ITEMS = [
   "LGTM!", "GG", "SEND IT", "10/10", "WFM", "no notes", "chef's kiss",
 ];
 const DECOR_COLORS = ["#1f883d", "#6a737d", "#9a6700", "#0969da", "#8250df"];
+const decorItems = [];
+
+function placeDecor(o) {
+  // o.x/o.y track the visual (rotated) bounding box; rotation expands the
+  // box around its center, so the layout box is shifted in by the margins.
+  o.el.style.transform =
+    "translate(" + (o.x + o.mx) + "px, " + (o.y + o.my) + "px) rotate(" + o.rot + "deg)";
+}
 
 function decorate() {
   const box = $("decor");
   box.replaceChildren();
-  const slots = [];
-  // top & bottom strips (the middle is skipped so nothing sits behind the header)
-  for (let i = 0; i < 8; i++) {
-    const x = i < 4 ? 2 + i * 6 : 78 + (i - 4) * 5.5;
-    slots.push({ left: x + "%", top: 4 + Math.random() * 42 + "px" });
-    slots.push({ left: x + 3 + "%", bottom: 4 + Math.random() * 42 + "px" });
-  }
-  // left & right columns
-  for (let i = 0; i < 6; i++) {
-    const y = 12 + i * 13 + Math.random() * 5;
-    slots.push({ left: 10 + Math.random() * 42 + "px", top: y + "%" });
-    slots.push({ right: 10 + Math.random() * 42 + "px", top: y + 6 + "%" });
-  }
-  const items = [...DECOR_ITEMS, ...DECOR_ITEMS]
-    .sort(() => Math.random() - 0.5)
-    .slice(0, slots.length);
-  slots.forEach((pos, i) => {
+  decorItems.length = 0;
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  // Scale the flock with the viewport: ~14 on a phone, up to 36 on a big screen
+  const count = Math.round(Math.min(36, Math.max(14, (W * H) / 45000)));
+  const texts = [];
+  while (texts.length < count) texts.push(...DECOR_ITEMS);
+  texts.sort(() => Math.random() - 0.5);
+  for (let i = 0; i < count; i++) {
     const s = document.createElement("span");
-    s.textContent = items[i];
-    const isEmoji = /\p{Extended_Pictographic}/u.test(items[i]);
-    s.style.fontSize = (isEmoji ? 18 + Math.random() * 16 : 11 + Math.random() * 5) + "px";
-    s.style.opacity = (0.16 + Math.random() * 0.24).toFixed(2);
-    s.style.setProperty("--rot", (Math.random() * 28 - 14).toFixed(1) + "deg");
-    s.style.setProperty("--amp", -(5 + Math.random() * 9).toFixed(1) + "px");
-    s.style.setProperty("--dur", (2.8 + Math.random() * 3.4).toFixed(2) + "s");
-    s.style.setProperty("--delay", (-Math.random() * 6).toFixed(2) + "s");
+    s.textContent = texts[i];
+    const isEmoji = /\p{Extended_Pictographic}/u.test(texts[i]);
+    s.style.fontSize = (isEmoji ? 16 + Math.random() * 14 : 11 + Math.random() * 5) + "px";
+    s.style.opacity = (0.14 + Math.random() * 0.22).toFixed(2);
     if (!isEmoji) s.style.color = DECOR_COLORS[i % DECOR_COLORS.length];
-    for (const side of ["left", "right", "top", "bottom"]) {
-      if (pos[side] !== undefined) s.style[side] = pos[side];
-    }
     box.appendChild(s);
-  });
+    const speed = 12 + Math.random() * 26; // px/s — a lazy drift, not a screensaver
+    const angle = Math.random() * 2 * Math.PI;
+    const rot = (Math.random() * 28 - 14).toFixed(1);
+    // Measure the rotated bounding box so bounces use the visual extent
+    s.style.transform = "rotate(" + rot + "deg)";
+    const rect = s.getBoundingClientRect();
+    const o = {
+      el: s,
+      w: rect.width,
+      h: rect.height,
+      mx: (rect.width - s.offsetWidth) / 2,
+      my: (rect.height - s.offsetHeight) / 2,
+      x: Math.random() * Math.max(1, W - rect.width),
+      y: Math.random() * Math.max(1, H - rect.height),
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      rot: rot,
+    };
+    placeDecor(o);
+    decorItems.push(o);
+  }
 }
+
+let decorLast = 0;
+function decorTick(now) {
+  // Cap dt so a backgrounded tab doesn't teleport everything on wake
+  const dt = Math.min(0.05, (now - decorLast) / 1000);
+  decorLast = now;
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  for (const o of decorItems) {
+    Object.assign(o, LGTM.bounceStep(o, W, H, dt));
+    placeDecor(o);
+  }
+  requestAnimationFrame(decorTick);
+}
+
+// Bounds are re-read every frame, so bounces track a resize live; this
+// extra pass pulls stragglers back inside when reduced-motion has the
+// animation loop off.
+window.addEventListener("resize", () => {
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  for (const o of decorItems) {
+    Object.assign(o, LGTM.bounceStep(o, W, H, 0));
+    placeDecor(o);
+  }
+});
 
 // ------------------------------------------------------------------
 // Boot
 // ------------------------------------------------------------------
 decorate();
+if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  requestAnimationFrame((t) => { decorLast = t; requestAnimationFrame(decorTick); });
+}
 renderDenylist();
 if (apiKey) {
   el.app.classList.remove("hidden");
