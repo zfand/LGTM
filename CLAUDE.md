@@ -9,6 +9,7 @@ Guidance for Claude Code when working in this repo.
 ## Layout
 
 - `index.html` — the entire app: markup, CSS, and vanilla JS in one file. This is intentional; keep it that way.
+- `og-image.png`, `apple-touch-icon.png` — static link-preview images (Open Graph tags in the head point at them; iMessage/Slack can't read data URIs). The only non-HTML assets allowed.
 - `tests/lgtm.test.mjs` — unit tests for the pure-logic core (see below). Run with `node --test`.
 - `.github/workflows/test.yml` — runs the tests on every push.
 - `README.md` — user-facing docs.
