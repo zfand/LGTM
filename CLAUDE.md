@@ -25,7 +25,7 @@ There is no build step, no package.json, and no dependencies (tests use only Nod
 ## Conventions in index.html
 
 - The script starts with a marked block (`// ==== LGTM core` … `// ==== end LGTM core`) holding all pure, DOM-free logic as the `LGTM` object. The tests extract this block by its markers and eval it in Node, so: keep the markers intact, keep the block free of DOM/`fetch`/`localStorage` references, and put any new testable logic inside it.
-- localStorage keys are namespaced `lgtm.*` (`lgtm.apiKey`, `lgtm.tags`, `lgtm.denylist`, `lgtm.seen`, `lgtm.cache`, `lgtm.depths`) and read/written through the `store` helper.
+- localStorage keys are namespaced `lgtm.*` (`lgtm.apiKey`, `lgtm.tags`, `lgtm.denylist`, `lgtm.seen`, `lgtm.cache`, `lgtm.depths`, `lgtm.motion`) and read/written through the `store` helper.
 - Giphy's `total_count` overstates how deep results actually go — deep offsets return **200 with empty `data`**. The believed depth per tag only ratchets down (`LGTM.updateDepth`), persists across days in `lgtm.depths`, and `growPool` always falls back to offset 0 before giving up. Don't trust `total_count` directly.
 - Pools hold **slim** gif objects (`LGTM.slimGif`: `{id, title, url, preview}`), never raw Giphy API objects.
 - Fetched pools are persisted to a day-scoped cache (`lgtm.cache`, validated by `LGTM.sanitizeCache`) so extra tabs and reloads reuse them instead of spending API quota — free Giphy keys are rate-limited per hour and the quota is shared across tabs. Don't remove this cache.

@@ -159,6 +159,16 @@
   ul.denylist img { width: 48px; height: 36px; object-fit: cover; border-radius: 4px; flex-shrink: 0; background: #eceff2; }
   ul.denylist .deny-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
   .empty-note { font-size: 13px; color: var(--muted); }
+  label.checkrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--text);
+    margin: 0;
+    cursor: pointer;
+  }
 
   /* --- key gate --- */
   #keyGate p { margin: 0 0 12px; font-size: 14px; }
@@ -264,6 +274,15 @@
             <button id="keySave" class="small">Update</button>
             <button id="keyForget" class="small danger-ghost">Forget</button>
           </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Background</h3>
+          <label class="checkrow">
+            <input type="checkbox" id="motionToggle">
+            Bouncing background motion
+          </label>
+          <p class="hint">Pauses by itself after 2 idle minutes and while the tab is hidden; any mouse or key activity wakes it.</p>
         </div>
 
         <div class="settings-section">
@@ -471,6 +490,7 @@ const LS_KEY  = "lgtm.apiKey";   // Giphy API key (user-supplied, this machine o
 const LS_TAGS = "lgtm.tags";     // array of search tags
 const LS_DENY = "lgtm.denylist"; // array of {id, title, preview}
 const LS_SEEN = "lgtm.seen";     // ids shown recently, to avoid repeats across days
+const LS_MOTION = "lgtm.motion"; // background motion toggle (null = follow the OS)
 const LS_CACHE = "lgtm.cache";   // today's fetched pools, shared across tabs/reloads
 const LS_DEPTHS = "lgtm.depths"; // per-tag real result depth learned from empty pages
 const BATCH = 50;                // gifs fetched per API call
@@ -526,7 +546,7 @@ const el = {
   copyMd: $("copyMd"), copyUrl: $("copyUrl"), reroll: $("reroll"), deny: $("deny"),
   tagsInput: $("tagsInput"),
   keyInput: $("keyInput"), keySave: $("keySave"), keyForget: $("keyForget"),
-  denyCount: $("denyCount"), denyList: $("denyList"), denyEmpty: $("denyEmpty"),
+  denyCount: $("denyCount"), denyList: $("denyList"), denyEmpty: $("denyEmpty"), motionToggle: $("motionToggle"),
   clearDeny: $("clearDeny"), exportBtn: $("exportBtn"), importBtn: $("importBtn"), importFile: $("importFile"),
   toast: $("toast"),
 };
@@ -946,8 +966,24 @@ function decorate() {
   }
 }
 
+// Motion runs at ~30fps (the drift is slow; 60 is wasted work), dozes off
+// after 2 idle minutes so a tab left open for days costs nothing, and the
+// browser already suspends rAF entirely while the tab is hidden.
+const MOTION_FRAME_MS = 30;
+const MOTION_IDLE_MS = 2 * 60 * 1000;
+let motionPref = store.get(LS_MOTION, null); // null = follow the OS preference
+let motionRunning = false;
+let lastActivity = Date.now();
 let decorLast = 0;
+
+function motionEnabled() {
+  if (motionPref !== null) return motionPref;
+  return !matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 function decorTick(now) {
+  if (!motionRunning) return;
+  if (Date.now() - lastActivity > MOTION_IDLE_MS) { motionRunning = false; return; } // doze off
   // Cap dt so a backgrounded tab doesn't teleport everything on wake
   const dt = Math.min(0.05, (now - decorLast) / 1000);
   decorLast = now;
@@ -957,8 +993,28 @@ function decorTick(now) {
     Object.assign(o, LGTM.bounceStep(o, W, H, dt));
     placeDecor(o);
   }
-  requestAnimationFrame(decorTick);
+  setTimeout(() => requestAnimationFrame(decorTick), MOTION_FRAME_MS);
 }
+
+function startMotion() {
+  if (motionRunning || !motionEnabled() || decorItems.length === 0) return;
+  motionRunning = true;
+  requestAnimationFrame((t) => { decorLast = t; requestAnimationFrame(decorTick); });
+}
+
+function stopMotion() { motionRunning = false; }
+
+// Any interaction counts as activity and wakes a dozing background
+for (const ev of ["pointermove", "pointerdown", "keydown", "wheel", "touchstart"]) {
+  window.addEventListener(ev, () => { lastActivity = Date.now(); startMotion(); }, { passive: true });
+}
+
+el.motionToggle.checked = motionEnabled();
+el.motionToggle.addEventListener("change", () => {
+  motionPref = el.motionToggle.checked;
+  store.set(LS_MOTION, motionPref);
+  if (motionPref) { lastActivity = Date.now(); startMotion(); } else { stopMotion(); }
+});
 
 // Bounds are re-read every frame, so bounces track a resize live; this
 // extra pass pulls stragglers back inside when reduced-motion has the
@@ -976,9 +1032,7 @@ window.addEventListener("resize", () => {
 // Boot
 // ------------------------------------------------------------------
 decorate();
-if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
-  requestAnimationFrame((t) => { decorLast = t; requestAnimationFrame(decorTick); });
-}
+startMotion();
 renderDenylist();
 if (apiKey) {
   el.app.classList.remove("hidden");
